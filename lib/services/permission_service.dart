@@ -12,12 +12,14 @@ class PermissionService {
       'location': await Permission.location.status,
       'camera': await Permission.camera.status,
       'notification': await Permission.notification.status,
+      'ignoreBatteryOptimizations': await Permission.ignoreBatteryOptimizations.status,
     };
 
     return {
       'location': permissions['location']!.isGranted,
       'camera': permissions['camera']!.isGranted,
       'notification': permissions['notification']!.isGranted,
+      'ignoreBatteryOptimizations': permissions['ignoreBatteryOptimizations']!.isGranted,
     };
   }
 
@@ -29,12 +31,14 @@ class PermissionService {
       Permission.location,
       Permission.camera,
       Permission.notification,
+      Permission.ignoreBatteryOptimizations,
     ].request();
 
     return {
       'location': results[Permission.location]?.isGranted ?? false,
       'camera': results[Permission.camera]?.isGranted ?? false,
       'notification': results[Permission.notification]?.isGranted ?? false,
+      'ignoreBatteryOptimizations': results[Permission.ignoreBatteryOptimizations]?.isGranted ?? false,
     };
   }
 
@@ -47,7 +51,8 @@ class PermissionService {
   // Check if all critical permissions are granted
   Future<bool> hasAllCriticalPermissions() async {
     final permissions = await checkAllPermissions();
-    return permissions['location']! && permissions['notification']!;
+    // Battery optimization is now considered critical for this app to run 24/7
+    return permissions['location']! && permissions['notification']! && permissions['ignoreBatteryOptimizations']!;
   }
 
   // Show permission rationale dialog
@@ -67,6 +72,10 @@ class PermissionService {
       case 'notification':
         title = 'Notification Permission Required';
         content = 'Notifications are essential to show that the app is running in background and for important alerts.';
+        break;
+      case 'ignoreBatteryOptimizations':
+        title = 'Disable Battery Optimization';
+        content = 'For 24/7 monitoring, this app must be exempt from battery optimization. Please allow this permission when prompted.';
         break;
     }
 

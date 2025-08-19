@@ -379,61 +379,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // Add swipe-to-delete confirmation
-  Future<void> _showDeleteConfirmation() async {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.delete_forever, color: Colors.red, size: 24),
-            const SizedBox(width: 8),
-            const Text('Delete Session'),
-          ],
-        ),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Are you sure you want to delete this monitoring session?',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 12),
-            Text('This will:'),
-            SizedBox(height: 8),
-            Text('• Stop all monitoring services'),
-            Text('• Clear current session data'),
-            Text('• Return to login screen'),
-            SizedBox(height: 12),
-            Text(
-              'Your credentials and QR code will be preserved.',
-              style: TextStyle(color: Colors.green, fontWeight: FontWeight.w500),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            child: const Text('Cancel'),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Delete Session'),
-            onPressed: () {
-              Navigator.of(context).pop();
-              _performSessionDelete();
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _showLogoutConfirmation() async {
     return showDialog<void>(
       context: context,
@@ -484,173 +429,166 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Handle session delete (swipe delete action)
-  Future<void> _performSessionDelete() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: Card(
-          child: Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Deleting session...'),
-              ],
+  Future<void> _executeCancellableAction(String title, Future<void> Function() action) async {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(title),
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    );
-
-    try {
-      // Stop services but keep wake lock for next session
-      _watchdogService.stopWatchdog();
-      
-      try {
-        await stopBackgroundServiceSafely();
-      } catch (e) {
-        print("Dashboard: Error stopping background service: $e");
-      }
-      
-      await Future.delayed(const Duration(milliseconds: 500));
-    } catch (e) {
-      print("Dashboard: Error during session delete: $e");
-    }
-
-    if (mounted) {
-      Navigator.of(context).pop();
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-        (route) => false,
       );
-    }
+
+      try {
+        await action();
+      } catch (e) {
+        print("Dashboard: Error during action '$title': $e");
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const LoginScreen()),
+          (route) => false,
+        );
+      }
   }
 
   Future<void> _performLogout() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: Card(
-          child: Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Logging out...'),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    try {
-      await ApiService.logout(widget.token, widget.deploymentCode);
-      final prefs = await SharedPreferences.getInstance();
-      // Clear only login credentials, but keep QR code and permissions
-      await prefs.remove('token');
-      await prefs.remove('deploymentCode');
-      // Keep 'qr_code' stored for convenience
-      // Keep permission status so user doesn't need to re-grant permissions
-      // Keep wake lock enabled for next session
-      
-      // Stop all services
-      _watchdogService.stopWatchdog();
-      
-      try {
-        await stopBackgroundServiceSafely();
-      } catch (e) {
-        print("Dashboard: Error stopping background service: $e");
-      }
-      
-      await Future.delayed(const Duration(milliseconds: 500));
-    } catch (e) {
-      print("Dashboard: Error during logout: $e");
-    }
-
-    if (mounted) {
-      Navigator.of(context).pop();
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-        (route) => false,
-      );
-    }
+    await _executeCancellableAction('Logging out...', () async {
+        await ApiService.logout(widget.token, widget.deploymentCode);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('token');
+        await prefs.remove('deploymentCode');
+        _watchdogService.stopWatchdog();
+        try {
+          await stopBackgroundServiceSafely();
+        } catch (e) {
+          print("Dashboard: Error stopping background service: $e");
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    // Handle swipe gestures - right swipe for home, left swipe for delete
     return PopScope(
       canPop: false,
-      child: GestureDetector(
-        onPanUpdate: (details) {
-          if (details.delta.dx > 20) {
-            // Swipe right detected - simulate home button
-            SystemNavigator.pop();
-          } else if (details.delta.dx < -20) {
-            // Swipe left detected - show delete confirmation
-            _showDeleteConfirmation();
-          }
-        },
-        child: Scaffold(
-          appBar: AppBar(
-            title: const Text('Device Monitor Dashboard'),
-            automaticallyImplyLeading: false,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.logout),
-                onPressed: _showLogoutConfirmation,
-                tooltip: 'Logout',
-              ),
-            ],
-          ),
-          body: _isLoading
-              ? const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text('Initializing Dashboard...'),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _initializeServices,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16.0),
-                    children: [
-                      // Status Card with built-in wake lock
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Device Monitor Dashboard'),
+          automaticallyImplyLeading: false,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: _showLogoutConfirmation,
+              tooltip: 'Logout',
+            ),
+          ],
+        ),
+        body: _isLoading
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Initializing Dashboard...'),
+                  ],
+                ),
+              )
+            : RefreshIndicator(
+                onRefresh: _initializeServices,
+                child: ListView(
+                  padding: const EdgeInsets.all(16.0),
+                  children: [
+                    // Status Card with built-in wake lock
+                    Card(
+                      color: Colors.green[900],
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.check_circle, color: Colors.green),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'High-Precision Monitoring Active',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                  Text(
+                                    '24/7 GPS tracking • Wake lock enabled • Continuous monitoring',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.screen_lock_rotation, color: Colors.green),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Watchdog Status Card
+                    if (_watchdogStatus.isNotEmpty) ...[
                       Card(
-                        color: Colors.green[900],
+                        color: (_watchdogStatus['isRunning'] ?? false) 
+                          ? Colors.blue[900] 
+                          : Colors.orange[900],
                         child: Padding(
                           padding: const EdgeInsets.all(16.0),
                           child: Row(
                             children: [
-                              const Icon(Icons.check_circle, color: Colors.green),
+                              Icon(
+                                (_watchdogStatus['isRunning'] ?? false) 
+                                  ? Icons.security 
+                                  : Icons.warning,
+                                color: (_watchdogStatus['isRunning'] ?? false) 
+                                  ? Colors.blue 
+                                  : Colors.orange,
+                              ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text(
-                                      'High-Precision Monitoring Active',
+                                    Text(
+                                      (_watchdogStatus['isRunning'] ?? false) 
+                                        ? 'Watchdog Active' 
+                                        : 'Watchdog Stopped',
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
-                                        color: Colors.green,
+                                        color: (_watchdogStatus['isRunning'] ?? false) 
+                                          ? Colors.blue 
+                                          : Colors.orange,
                                       ),
                                     ),
                                     Text(
-                                      '24/7 GPS tracking • Wake lock enabled • Continuous monitoring',
+                                      (_watchdogStatus['isRunning'] ?? false) 
+                                        ? 'Monitoring app health every 15 minutes'
+                                        : 'App monitoring disabled',
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: Colors.white,
@@ -659,120 +597,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ],
                                 ),
                               ),
-                              const Icon(Icons.screen_lock_rotation, color: Colors.green),
                             ],
                           ),
                         ),
                       ),
                       const SizedBox(height: 12),
-
-                      // Swipe instruction card
-                      Card(
-                        color: Colors.blue[900]?.withOpacity(0.7),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.swipe, color: Colors.lightBlue, size: 20),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  'Swipe → to minimize app • Swipe ← to delete session',
-                                  style: TextStyle(
-                                    color: Colors.lightBlue[100],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Watchdog Status Card
-                      if (_watchdogStatus.isNotEmpty) ...[
-                        Card(
-                          color: (_watchdogStatus['isRunning'] ?? false) 
-                            ? Colors.blue[900] 
-                            : Colors.orange[900],
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  (_watchdogStatus['isRunning'] ?? false) 
-                                    ? Icons.security 
-                                    : Icons.warning,
-                                  color: (_watchdogStatus['isRunning'] ?? false) 
-                                    ? Colors.blue 
-                                    : Colors.orange,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        (_watchdogStatus['isRunning'] ?? false) 
-                                          ? 'Watchdog Active' 
-                                          : 'Watchdog Stopped',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: (_watchdogStatus['isRunning'] ?? false) 
-                                            ? Colors.blue 
-                                            : Colors.orange,
-                                        ),
-                                      ),
-                                      Text(
-                                        (_watchdogStatus['isRunning'] ?? false) 
-                                          ? 'Monitoring app health every 15 minutes'
-                                          : 'App monitoring disabled',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      
-                      MetricCard(
-                        title: 'Battery',
-                        icon: _getBatteryIcon(),
-                        iconColor: _getBatteryColor(),
-                        value: '${_deviceService.batteryLevel}%',
-                        subtitle: _deviceService.batteryState.toString().split('.').last.toUpperCase(),
-                        isRealTime: true,
-                      ),
-                      MetricCard(
-                        title: 'Signal Strength',
-                        icon: Icons.signal_cellular_alt,
-                        iconColor: _getSignalColor(),
-                        value: _deviceService.signalStrength.toUpperCase(),
-                        subtitle: _deviceService.connectivityResult.toString().split('.').last.toUpperCase(),
-                        isRealTime: true,
-                      ),
-                      MetricCard(
-                        title: 'Internet Speed',
-                        icon: Icons.speed,
-                        iconColor: Colors.blue,
-                        value: '${_internetSpeed.toStringAsFixed(1)} KB/s',
-                        subtitle: 'SIMULATED DATA',
-                        isRealTime: true,
-                      ),
-                      
-                      _buildLocationCard(),
                     ],
-                  ),
+                    
+                    MetricCard(
+                      title: 'Battery',
+                      icon: _getBatteryIcon(),
+                      iconColor: _getBatteryColor(),
+                      value: '${_deviceService.batteryLevel}%',
+                      subtitle: _deviceService.batteryState.toString().split('.').last.toUpperCase(),
+                      isRealTime: true,
+                    ),
+                    MetricCard(
+                      title: 'Signal Strength',
+                      icon: Icons.signal_cellular_alt,
+                      iconColor: _getSignalColor(),
+                      value: _deviceService.signalStrength.toUpperCase(),
+                      subtitle: _deviceService.connectivityResult.toString().split('.').last.toUpperCase(),
+                      isRealTime: true,
+                    ),
+                    MetricCard(
+                      title: 'Internet Speed',
+                      icon: Icons.speed,
+                      iconColor: Colors.blue,
+                      value: '${_internetSpeed.toStringAsFixed(1)} KB/s',
+                      subtitle: 'SIMULATED DATA',
+                      isRealTime: true,
+                    ),
+                    
+                    _buildLocationCard(),
+                  ],
                 ),
-        ),
+              ),
       ),
     );
   }

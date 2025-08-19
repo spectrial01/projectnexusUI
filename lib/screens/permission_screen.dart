@@ -19,6 +19,7 @@ class _PermissionScreenState extends State<PermissionScreen> {
     'location': false,
     'camera': false,
     'notification': false,
+    'ignoreBatteryOptimizations': false,
   };
   bool _isLoading = false;
 
@@ -51,19 +52,21 @@ class _PermissionScreenState extends State<PermissionScreen> {
     setState(() => _isLoading = true);
     
     try {
-      final results = await _permissionService.requestAllPermissions();
-      if (mounted) {
-        setState(() {
-          _permissions = results;
-          _isLoading = false;
-        });
-        
-        // Show results
-        _showPermissionResults(results);
-      }
+      // Request standard permissions first
+      await _requestSpecificPermission('location');
+      await _requestSpecificPermission('camera');
+      await _requestSpecificPermission('notification');
+      
+      // Then request battery optimization
+      await _requestSpecificPermission('ignoreBatteryOptimizations');
+
+      // Final check
+      await _checkAllPermissions();
+
     } catch (e) {
       print('PermissionScreen: Error requesting permissions: $e');
-      if (mounted) {
+    } finally {
+      if(mounted) {
         setState(() => _isLoading = false);
       }
     }
@@ -81,18 +84,21 @@ class _PermissionScreenState extends State<PermissionScreen> {
       case 'notification':
         permission = Permission.notification;
         break;
+      case 'ignoreBatteryOptimizations':
+        permission = Permission.ignoreBatteryOptimizations;
+        break;
       default:
         return;
     }
 
     try {
-      final granted = await _permissionService.requestPermission(permission);
+      final status = await permission.request();
       if (mounted) {
         setState(() {
-          _permissions[permissionType] = granted;
+          _permissions[permissionType] = status.isGranted;
         });
         
-        if (!granted) {
+        if (status.isPermanentlyDenied) {
           await _permissionService.showPermissionRationale(context, permissionType);
         }
       }
@@ -101,20 +107,7 @@ class _PermissionScreenState extends State<PermissionScreen> {
     }
   }
 
-  void _showPermissionResults(Map<String, bool> results) {
-    final granted = results.values.where((v) => v).length;
-    final total = results.length;
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Permissions granted: $granted/$total'),
-        backgroundColor: granted == total ? Colors.green : Colors.orange,
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  bool get _canProceed => _permissions['location']! && _permissions['notification']!;
+  bool get _canProceed => _permissions['location']! && _permissions['notification']! && _permissions['ignoreBatteryOptimizations']!;
 
   @override
   Widget build(BuildContext context) {
@@ -138,35 +131,35 @@ class _PermissionScreenState extends State<PermissionScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Project Nexus',
+                    'Critical Permissions Required',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Please grant the following permissions for full functionality',
+                    'Please grant the following permissions for full functionality.',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: Colors.grey[400],
                     ),
                   ),
                   const SizedBox(height: 32),
 
+                  // Battery Optimization
+                  PermissionStatusWidget(
+                    status: _permissions['ignoreBatteryOptimizations']! ? PermissionStatus.granted : PermissionStatus.denied,
+                    title: 'Battery Optimization',
+                    description: 'CRITICAL: Required for 24/7 background monitoring. Please select "Allow".',
+                    onRequest: () => _requestSpecificPermission('ignoreBatteryOptimizations'),
+                  ),
+                  const SizedBox(height: 16),
+
                   // Location Permission
                   PermissionStatusWidget(
                     status: _permissions['location']! ? PermissionStatus.granted : PermissionStatus.denied,
                     title: 'Location Permission',
-                    description: 'Required for GPS tracking and position monitoring',
+                    description: 'CRITICAL: Required for GPS tracking and position monitoring.',
                     onRequest: () => _requestSpecificPermission('location'),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Camera Permission  
-                  PermissionStatusWidget(
-                    status: _permissions['camera']! ? PermissionStatus.granted : PermissionStatus.denied,
-                    title: 'Camera Permission',
-                    description: 'Used for QR code scanning and evidence capture',
-                    onRequest: () => _requestSpecificPermission('camera'),
                   ),
                   const SizedBox(height: 16),
 
@@ -174,8 +167,17 @@ class _PermissionScreenState extends State<PermissionScreen> {
                   PermissionStatusWidget(
                     status: _permissions['notification']! ? PermissionStatus.granted : PermissionStatus.denied,
                     title: 'Notification Permission',
-                    description: 'Essential for background monitoring alerts',
+                    description: 'CRITICAL: Essential for background service alerts.',
                     onRequest: () => _requestSpecificPermission('notification'),
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Camera Permission  
+                  PermissionStatusWidget(
+                    status: _permissions['camera']! ? PermissionStatus.granted : PermissionStatus.denied,
+                    title: 'Camera Permission',
+                    description: 'OPTIONAL: Used for QR code scanning for easier login.',
+                    onRequest: () => _requestSpecificPermission('camera'),
                   ),
                   const SizedBox(height: 32),
 
@@ -193,7 +195,7 @@ class _PermissionScreenState extends State<PermissionScreen> {
                           )
                         : const Icon(Icons.security),
                       label: Text(
-                        _isLoading ? 'Requesting Permissions...' : 'Grant All Permissions',
+                        _isLoading ? 'Requesting...' : 'Request All Permissions',
                         style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
@@ -205,45 +207,6 @@ class _PermissionScreenState extends State<PermissionScreen> {
                   const SizedBox(height: 16),
 
                   // Continue Button
-                  if (_canProceed) ...[
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.green[900]?.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.green),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.check_circle, color: Colors.green),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Ready to Continue!',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.green,
-                                  ),
-                                ),
-                                Text(
-                                  'Essential permissions granted. Camera permission is optional.',
-                                  style: TextStyle(
-                                    color: Colors.green[200],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
-
                   SizedBox(
                     width: double.infinity,
                     height: 56,
@@ -262,7 +225,7 @@ class _PermissionScreenState extends State<PermissionScreen> {
                       label: Text(
                         _canProceed
                             ? 'Continue to Login'
-                            : 'Location & Notification Required',
+                            : 'Critical Permissions Required',
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
@@ -272,80 +235,6 @@ class _PermissionScreenState extends State<PermissionScreen> {
                         foregroundColor: _canProceed
                             ? Colors.black
                             : Colors.grey[400],
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Information Cards
-                  Card(
-                    color: Colors.blue[900],
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.info, color: Colors.lightBlueAccent),
-                              const SizedBox(width: 12),
-                              const Text(
-                                'Permission Details',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.lightBlueAccent,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            '📍 Location: GPS tracking for security monitoring\n'
-                            '📷 Camera: QR code scanning and evidence capture\n'
-                            '🔔 Notifications: Background monitoring alerts',
-                            style: TextStyle(
-                              color: Colors.lightBlueAccent[100],
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  Card(
-                    color: Colors.orange[900],
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.settings, color: Colors.orange),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Manual Setup',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.orange,
-                                  ),
-                                ),
-                                Text(
-                                  'You can also enable permissions manually in Settings > Apps > Project Nexus > Permissions',
-                                  style: TextStyle(
-                                    color: Colors.orange[100],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
                       ),
                     ),
                   ),

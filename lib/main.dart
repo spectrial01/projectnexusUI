@@ -12,7 +12,9 @@ Future<void> main() async {
     WidgetsFlutterBinding.ensureInitialized();
     print('Main: Flutter initialized');
     
-    // Initialize background service but don't let it block app startup
+    // This is intentionally not awaited to avoid blocking the UI thread.
+    // Any errors during background service initialization will be handled
+    // within the function itself and will not crash the app.
     _initializeBackgroundServiceAsync();
     
     print('Main: Starting app...');
